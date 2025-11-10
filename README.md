@@ -11,200 +11,143 @@ tags:
 - unsloth
 ---
 
-# Model Card for Model ID
-
-<!-- Provide a quick summary of what the model is/does. -->
-
-
+# Mistral Medical Chat LoRA Adapter (v1)
 
 ## Model Details
 
 ### Model Description
+This model is a **LoRA adapter fine-tuned on medical instruction and Q&A data** for the base model `mistralai/Mistral-7B-Instruct-v0.2`. It is designed to provide medically-informed responses to prompts in a doctor-patient style.  
 
-<!-- Provide a longer summary of what this model is. -->
+- **Developed by:** Yassine Ouali
+- **Model type:** Causal Language Model with LoRA adapter
+- **Language(s):** English (medical domain)
+- **License:** CC BY-NC 4.0
+- **Finetuned from model:** mistralai/Mistral-7B-Instruct-v0.2
 
-
-
-- **Developed by:** [More Information Needed]
-- **Funded by [optional]:** [More Information Needed]
-- **Shared by [optional]:** [More Information Needed]
-- **Model type:** [More Information Needed]
-- **Language(s) (NLP):** [More Information Needed]
-- **License:** [More Information Needed]
-- **Finetuned from model [optional]:** [More Information Needed]
-
-### Model Sources [optional]
-
-<!-- Provide the basic links for the model. -->
-
-- **Repository:** [More Information Needed]
-- **Paper [optional]:** [More Information Needed]
-- **Demo [optional]:** [More Information Needed]
+### Model Sources
+- **Hugging Face Repository:** [ysn-ir/mistral-medical-chat-lora-v1](https://huggingface.co/ysn-ir/mistral-medical-chat-lora-v1)
+- **Paper/Demo:** N/A
 
 ## Uses
 
-<!-- Address questions around how the model is intended to be used, including the foreseeable users of the model and those affected by the model. -->
-
 ### Direct Use
+- Can generate medically-informed text for educational or research purposes.
+- Suitable for **doctor-patient style conversation simulations**.
 
-<!-- This section is for the model use without fine-tuning or plugging into a larger ecosystem/app. -->
-
-[More Information Needed]
-
-### Downstream Use [optional]
-
-<!-- This section is for the model use when fine-tuned for a task, or when plugged into a larger ecosystem/app -->
-
-[More Information Needed]
+### Downstream Use
+- Can be integrated into applications or chatbots to provide medical guidance **under supervision**.
+- Not a replacement for professional medical advice.
 
 ### Out-of-Scope Use
-
-<!-- This section addresses misuse, malicious use, and uses that the model will not work well for. -->
-
-[More Information Needed]
+- **Do not use** for actual diagnosis or treatment decisions.
+- Not suitable for general-purpose conversation outside the medical context.
 
 ## Bias, Risks, and Limitations
-
-<!-- This section is meant to convey both technical and sociotechnical limitations. -->
-
-[More Information Needed]
+- Model may generate **incorrect or unsafe advice**.
+- Outputs reflect biases present in the training data.
+- Users must **verify all outputs with qualified medical professionals**.
 
 ### Recommendations
-
-<!-- This section is meant to convey recommendations with respect to the bias, risk, and technical limitations. -->
-
-Users (both direct and downstream) should be made aware of the risks, biases and limitations of the model. More information needed for further recommendations.
+- Use in **research, educational, or controlled environments**.
+- Avoid direct patient-facing deployments.
 
 ## How to Get Started with the Model
+```python
+!pip install -q bitsandbytes
+!pip install -q transformers accelerate peft
+
+from transformers import AutoModelForCausalLM, AutoTokenizer
+from peft import PeftModel
+import torch
+
+# -----------------------------
+# 1️⃣ Model & tokenizer setup
+# -----------------------------
+base_model_name = "mistralai/Mistral-7B-Instruct-v0.2"
+lora_repo_id = "ysn-ir/mistral-medical-chat-lora-v1"  # Hugging Face repo
+
+tokenizer = AutoTokenizer.from_pretrained(base_model_name)
+tokenizer.pad_token = tokenizer.eos_token
+device = "cuda" if torch.cuda.is_available() else "cpu"
+
+# -----------------------------
+# 2️⃣ Prompts for testing
+# -----------------------------
+prompts = [
+    "Patient: I have a headache and mild fever. What should I do?\nDoctor:",
+    "Patient: I have high blood pressure. Can I take ibuprofen?\nDoctor:",
+    "Patient: My child has a rash on their arm. What should I do?\nDoctor:",
+    "Patient: I feel dizzy after taking my medication.\nDoctor:",
+    "Write a general greeting message for a friend."
+]
+
+# -----------------------------
+# 3️⃣ Function to generate responses
+# -----------------------------
+def generate_response(model, prompt, max_tokens=150):
+    # Move inputs to same device as model
+    model_device = next(model.parameters()).device
+    inputs = tokenizer(prompt, return_tensors="pt")
+    inputs = {k: v.to(model_device) for k, v in inputs.items()}
+
+    with torch.no_grad():
+        outputs = model.generate(
+            **inputs,
+            max_new_tokens=max_tokens,
+            do_sample=True,
+            temperature=0.3,
+            top_p=0.8,
+            pad_token_id=tokenizer.eos_token_id
+        )
+    return tokenizer.decode(outputs[0], skip_special_tokens=True)
+
+# -----------------------------
+# 4️⃣ Generate responses one model at a time
+# -----------------------------
+lora_responses = []
+
+
+# --- Step 2: LoRA model from Hugging Face ---
+print("\n--- Generating LoRA model responses ---")
+model_lora_base = AutoModelForCausalLM.from_pretrained(
+    base_model_name,
+    torch_dtype=torch.float16,
+    load_in_4bit=True,
+    device_map="auto"
+)
+model_lora = PeftModel.from_pretrained(
+    model_lora_base,
+    lora_repo_id,
+    torch_dtype=torch.float16
+)
+model_lora.eval()
+
+for prompt in prompts:
+    print(f"Generating LoRA response for: {prompt[:40]}...")
+    
+    if "Patient:" in prompt:
+        engineered_prompt = (
+            "You are a medical AI assistant. Provide general, safe advice only. "
+            "Do not give dangerous instructions or mention extreme procedures. "
+            "If the situation might be serious, instruct the patient to consult a licensed doctor immediately.\n"
+            + prompt
+        )
+        response = generate_response(model_lora, engineered_prompt)
+    else:
+        # For non-medical prompts, use base model style
+        response = generate_response(model_lora_base, prompt)
+
+    lora_responses.append(response)
+
+# Clear VRAM
+del model_lora
+torch.cuda.empty_cache()
+
+# --- Step 3: Show results ---
+print("\n" + "=" * 30 + " FINAL RESULTS " + "=" * 30)
+for i, prompt in enumerate(prompts):
+    print(f"\n=== Prompt {i+1} ===")
+    print("Prompt:", prompt, "\n")
+    print("💬 LoRA model response:\n", lora_responses[i])
+    print("-" * 75)
 
-Use the code below to get started with the model.
-
-[More Information Needed]
-
-## Training Details
-
-### Training Data
-
-<!-- This should link to a Dataset Card, perhaps with a short stub of information on what the training data is all about as well as documentation related to data pre-processing or additional filtering. -->
-
-[More Information Needed]
-
-### Training Procedure
-
-<!-- This relates heavily to the Technical Specifications. Content here should link to that section when it is relevant to the training procedure. -->
-
-#### Preprocessing [optional]
-
-[More Information Needed]
-
-
-#### Training Hyperparameters
-
-- **Training regime:** [More Information Needed] <!--fp32, fp16 mixed precision, bf16 mixed precision, bf16 non-mixed precision, fp16 non-mixed precision, fp8 mixed precision -->
-
-#### Speeds, Sizes, Times [optional]
-
-<!-- This section provides information about throughput, start/end time, checkpoint size if relevant, etc. -->
-
-[More Information Needed]
-
-## Evaluation
-
-<!-- This section describes the evaluation protocols and provides the results. -->
-
-### Testing Data, Factors & Metrics
-
-#### Testing Data
-
-<!-- This should link to a Dataset Card if possible. -->
-
-[More Information Needed]
-
-#### Factors
-
-<!-- These are the things the evaluation is disaggregating by, e.g., subpopulations or domains. -->
-
-[More Information Needed]
-
-#### Metrics
-
-<!-- These are the evaluation metrics being used, ideally with a description of why. -->
-
-[More Information Needed]
-
-### Results
-
-[More Information Needed]
-
-#### Summary
-
-
-
-## Model Examination [optional]
-
-<!-- Relevant interpretability work for the model goes here -->
-
-[More Information Needed]
-
-## Environmental Impact
-
-<!-- Total emissions (in grams of CO2eq) and additional considerations, such as electricity usage, go here. Edit the suggested text below accordingly -->
-
-Carbon emissions can be estimated using the [Machine Learning Impact calculator](https://mlco2.github.io/impact#compute) presented in [Lacoste et al. (2019)](https://arxiv.org/abs/1910.09700).
-
-- **Hardware Type:** [More Information Needed]
-- **Hours used:** [More Information Needed]
-- **Cloud Provider:** [More Information Needed]
-- **Compute Region:** [More Information Needed]
-- **Carbon Emitted:** [More Information Needed]
-
-## Technical Specifications [optional]
-
-### Model Architecture and Objective
-
-[More Information Needed]
-
-### Compute Infrastructure
-
-[More Information Needed]
-
-#### Hardware
-
-[More Information Needed]
-
-#### Software
-
-[More Information Needed]
-
-## Citation [optional]
-
-<!-- If there is a paper or blog post introducing the model, the APA and Bibtex information for that should go in this section. -->
-
-**BibTeX:**
-
-[More Information Needed]
-
-**APA:**
-
-[More Information Needed]
-
-## Glossary [optional]
-
-<!-- If relevant, include terms and calculations in this section that can help readers understand the model or model card. -->
-
-[More Information Needed]
-
-## More Information [optional]
-
-[More Information Needed]
-
-## Model Card Authors [optional]
-
-[More Information Needed]
-
-## Model Card Contact
-
-[More Information Needed]
-### Framework versions
-
-- PEFT 0.17.1
